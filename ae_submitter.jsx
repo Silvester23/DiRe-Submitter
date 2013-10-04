@@ -7,15 +7,21 @@ if (typeof String.prototype.startsWith != 'function') {
 }
 
 
+if (typeof String.prototype.isSubstring != 'function') {
+  String.prototype.isSubstring = function (str){
+    return str.indexOf(this) != -1;
+  };
+}
+
 function fileExists(path) {
     var file = new File(path);
     return file.exists;
 }
 
-function isSubstring(str1, str2) {
-    return str2.indexOf(str1) != -1;
+function folderExists(path) {
+    var folder = new Folder(path);
+    return folder.exists;
 }
-
 
 // Check whether full script access is activated
 safeToRunScript = true;
@@ -30,10 +36,11 @@ var mac = false,
         cfg_path,
         grid_path;
     if(system.osName.startsWith("Mac") || $.os.startsWith("Mac"))  {
+            mac = true;
             cfg_path = "/Users/shared/Adobe/ae_submitter_config.txt";
             grid_path = "/Volumes/grid";
     } else {
-        cfg_path = "C:/Program Files/Adobe/Adobe After Effects CS6/Support Files/ae_submitter_config.txt";
+        cfg_path = "C:/Users/" + $.getenv("USERNAME")+ "/ae_submitter_config.txt";
         grid_path = "X:";
     }
 
@@ -136,9 +143,9 @@ if(safeToRunScript) {
             alert(error + " is not set");
             return false;
         }
-        cfg_string = stringify(config);
+        json_string = getJSON(config);
         
-        writeToFile(cfg_path,cfg_string);
+        writeToFile(cfg_path,json_string);
         return config;
     }
 
@@ -161,7 +168,7 @@ if(safeToRunScript) {
     }
 
     function read_config() {
-        f = new File("/Users/shared/Adobe/ae_submitter_config.txt");
+        f = new File(cfg_path);
         if(f.open("r")) {
             content = f.read();
             eval("config = " + content + ";");
@@ -176,7 +183,7 @@ if(safeToRunScript) {
         return app.project.file !== null;
     }
 
-    function stringify(config) {
+    function getJSON(config) {
         cfg_string = "{";
         for( prop in config ) {
             if(fields[prop] instanceof EditText) {      
@@ -199,6 +206,15 @@ if(safeToRunScript) {
         return cfg_string;
     }
 
+    function getConfigString(config) {
+        labels = ["shared_path","base_url","username","password","block_size","render_queue_index","posthook","fps","h264","prores","dnxhd","proxy"]
+        cfg_string = ""
+        for(var i = 0; i < labels.length; i++) {
+            cfg_string += config[labels[i]] + " ";
+        }
+        return cfg_string;
+    }
+
 
     function submit() {
         config = write_config();
@@ -208,9 +224,9 @@ if(safeToRunScript) {
 
         var render_queue_index = config["render_queue_item"].index+1;
         config["render_queue_index"] = render_queue_index;
-        cfg_string = stringify(config);
-       
+        cfg_string = getConfigString(config);
 
+        
         if(!checkSaved()) {
             alert("Project must be saved first");
             return;
@@ -231,17 +247,24 @@ if(safeToRunScript) {
             return;
         }
 
-
+        var sep;
+        if(mac) {
+            sep = "/";
+        }
+        else {
+           sep = "\\";
+        }
         var ext_split = src_path.split('.');
         var ext = ext_split.pop();
         var name = ext_split.pop();
-        var dir_split = name.split("/");
+        var dir_split = name.split(sep)
         var basename = dir_split.pop();
         var dirname = "";
         for(var i = 0; i < dir_split.length; i++) {
             dirname += dir_split[i] + "/";
         }
         submit_path = dirname + "_" + basename + "_submit." + ext;
+        
         
         if(fileExists(submit_path)) {
             if(!Window.confirm("File was already submitted, submit again? (overwrites submitted file)",true,"Confirm")) {
@@ -258,10 +281,30 @@ if(safeToRunScript) {
         }
 
         curfolder = (new File($.fileName)).parent.absoluteURI;
-        params = "'"+ cfg_string + "'" + " 'aftereffectsproject' '" + src_path + "' " + frame_start + " " + frame_end;
-        
-        alert(grid_path + "/users/");
-        alert(system.callSystem("python " + grid_path +  "/users/jan/murmann/DiRe-Submitter/submit_to_dire.py " + params));    
+        params = cfg_string + " aftereffectsproject " + src_path + " " + frame_start + " " + frame_end;
+       
+        if(mac || "python".isSubstring($.getenv("PATH"))) {
+            python_cmd = "python "
+        }
+        else {
+            if(folderExists("C:/python27")) {
+                python_cmd = "C:/python27/python ";
+            }
+            else if(folderExists("C:/python26")) {
+                python_cmd = "C:/python26/python ";
+            }
+            else {
+                python_cmd = false;
+            }
+        }
+    
+        if(python_cmd != false) {
+            cmd = python_cmd + grid_path +  "/users/jan/murmann/DiRe-Submitter/submit_to_dire.py " + params
+            alert(system.callSystem(cmd));    
+        }
+        else {
+            alert("Error: No python installation found.");
+        }
         
     }
 

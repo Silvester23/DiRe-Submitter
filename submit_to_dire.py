@@ -136,5 +136,12 @@ def submit_to_dire(args):
         return ret
 
 if __name__ == "__main__":
-    sys.argv[1] = json.loads(sys.argv[1])
-    submit_to_dire(arg for arg in sys.argv[1:])
+    config = {}
+    labels = ["shared_path","base_url","username","password","block_size","render_queue_index","posthook","fps","h264","prores","dnxhd","proxy"]
+
+    for i in range(len(labels)):
+        config[labels[i]] = sys.argv[i+1]
+
+    args = [config]
+    args.extend(sys.argv[len(labels)+1:])
+    submit_to_dire(args)
