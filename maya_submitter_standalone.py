@@ -25,28 +25,28 @@ class Submitter(OpenMayaMPx.MPxCommand):
         
         cmds.text( label='shared path' )
         cmds.rowLayout( numberOfColumns=2, columnWidth=(2,25) )
-        shared_path = cmds.textField( "shared_path", w=400 )
-        selectPathButton = cmds.button(label = "...", command=self.pickshared_path, width=25)
+        sharedPath = cmds.textField( "sharedPath", w=400 )
+        selectPathButton = cmds.button(label = "...", command=self.pickSharedPath, width=25)
         cmds.setParent("..")
 
         cmds.text( label='base URL' )
-        base_url = cmds.textField( "base_url", text="http://dire.btf.de" )
+        baseURL = cmds.textField( "baseURL", text="http://dire.btf.de" )
 
         cmds.text( label='username' )
-        username = cmds.textField( "username", text="btf" )
+        username = cmds.textField( "username" )
 
         cmds.text( label='password' )
         password = cmds.textField( "password" )
         
         cmds.text( label='block size' )
-        block_size = cmds.textField( "block_size", w=200 )
+        blockSize = cmds.textField( "blockSize", w=200 )
         
         cmds.text( label = '')
         
         cmds.columnLayout()
         
         cmds.rowLayout(numberOfColumns=7)
-        posthook = cmds.checkBox( 'posthook' )
+        transcodeResult = cmds.checkBox( 'transcode_result' )
         
         cmds.text( label='fps' )
         fps = cmds.intField( "fps", w=50, value=25 )
@@ -67,8 +67,8 @@ class Submitter(OpenMayaMPx.MPxCommand):
     
     
     def populateInputs(self):
-        labels = ["shared_path", "base_url", "username", "password", "block_size"]
-        checkboxes = ["posthook", "h264", "prores", "dnxhd", "proxy"]
+        labels = ["sharedPath", "baseURL", "username", "password", "blockSize"]
+        checkboxes = ["transcode_result", "h264", "prores", "dnxhd", "proxy"]
         
         for key in self.config:
             if key in labels:
@@ -83,12 +83,12 @@ class Submitter(OpenMayaMPx.MPxCommand):
     def readAllInputs(self):
         inputs = {}
         
-        for label in ["shared_path", "base_url", "username", "password", "block_size"]:    
+        for label in ["sharedPath", "baseURL", "username", "password", "blockSize"]:    
             inputs[label] = cmds.textField( label, query=True, text=True )
 
         inputs["fps"] = cmds.intField( "fps", query=True, value=True )
             
-        for checkbox in ["posthook", "h264", "prores", "dnxhd", "proxy"]:
+        for checkbox in ["transcode_result", "h264", "prores", "dnxhd", "proxy"]:
             inputs[checkbox] = cmds.checkBox( checkbox, query=True, value=True)
 
         
@@ -105,50 +105,113 @@ class Submitter(OpenMayaMPx.MPxCommand):
         self.config = self.readAllInputs()
         _write_config("submit",self.config)
 
-        for label in ["shared_path","base_url","username","password"]:
+        for label in ["sharedPath","baseURL","username","password"]:
             if not self.config[label]:
                 self.message('%s is not set' % (label))
                 return
+
+        
 
         if not check_saved():
             self.message( "Project must be saved first")
             return
 
-        if not cmds.file(query=True, sceneName=True).startswith(self.config["shared_path"]) or not self.project_directory():
+        if not cmds.file(query=True, sceneName=True).startswith(self.config["sharedPath"]) or not self.project_directory():
             self.message('Project is not saved on shared path')
             return
-            
-        if os.path.exists(self.submit_path()):
+        
+        login_url = urlparse.urljoin(self.config['baseURL'], 'admin/')
+        add_url = urlparse.urljoin(login_url, 'tasks/mayaproject/add/')
+        cookies = urllib2.HTTPCookieProcessor()
+        urlopen = urllib2.build_opener(cookies)
+        csrftoken = ''      
+
+        self.info(login_url)
+        try:
+            page = urlopen.open(login_url)
+        except urllib2.HTTPError as e:
+            self.info("HTTP Error code: " + str(e.code))
+            raise
+
+        
+        for cookie in cookies.cookiejar:
+            if cookie.name == 'csrftoken':
+                csrftoken = cookie.value
+        params = urllib.urlencode([('csrfmiddlewaretoken', csrftoken),
+                                   ('username', self.config['username']),
+                                   ('password', self.config['password']),
+                                   ('this_is_the_login_form', '1'),
+                                   ('next', '/admin/')])
+        page = urlopen.open(login_url, params)
+        content = page.read()
+        if "Welcome," not in content:
+            self.message('Login unsuccessful')
+            return
+
+        submit_path = self.submit_path()
+        self.info( "Submit Path: " + submit_path )
+        if os.path.exists(submit_path):
             if cmds.confirmDialog(message='File was already submitted, submit again? (overwrites submitted file)', button=["Yes","No"], defaultButton="No", dismissString="No", cancelButton="No") == "No":
                 return
-            cmds.sysFile(self.submit_path(), delete=True)
+            cmds.sysFile(submit_path, delete=True)
         if not make_paths_relative():
             return
         
-        src_path = cmds.file(query=True, sceneName=True)
-        frame_start = int(cmds.playbackOptions(query=True, ast=True))
-        frame_end = int(cmds.playbackOptions(query=True, aet=True))
+        #copy project file to submit_path
+        src = cmds.file(query=True, sceneName=True)
+        cmds.sysFile(src, copy=submit_path)
         
-        sys.path.append(os.path.join(self.config["shared_path"],"users/jan/murmann/DiRe-Submitter"))
-        import submit_to_dire
+        post_hook = ''
+        if self.config['transcode_result']:
+            post_hook = '0'
+        post_hook_options = {'fps': self.config['fps']}
+        if self.config['proxy']:
+            post_hook_options['proxy'] = True
+        if self.config['h264']:
+            post_hook_options['h264'] = True
+        if self.config['prores']:
+            post_hook_options['prores'] = True
+        if self.config['dnxhd']:
+            post_hook_options['dnxhd'] = True
+        post_hook_options = json.dumps(post_hook_options)
+
+        params = [('csrfmiddlewaretoken', csrftoken),
+                  ('tasks-job-content_type-object_id-TOTAL_FORMS', '1'),
+                  ('tasks-job-content_type-object_id-INITIAL_FORMS', '0'),
+                  ('tasks-job-content_type-object_id-0-status', '0'),
+                  ('tasks-job-content_type-object_id-0-priority', '50'),
+                  ('tasks-job-content_type-object_id-0-pool', '1'),
+                  ('tasks-job-content_type-object_id-0-post_hook', post_hook),
+                  ('tasks-job-content_type-object_id-0-post_hook_options', post_hook_options),
+                  ('project_file', self.relative_path()),
+                  ('project_directory', self.project_directory()),
+                  ('block_size', self.config['blockSize']),
+                  ('frame_start', str(int(cmds.playbackOptions(query=True, ast=True)))),
+                  ('frame_end', str(int(cmds.playbackOptions(query=True, aet=True)))),
+                  ('_save', 'Save')]
         
-        self.message(submit_to_dire.submit_to_dire([self.config, "blenderscene", src_path, frame_start, frame_end]))
-        
+        page = urlopen.open(add_url, urllib.urlencode(params))
+        content = page.read()
+        if 'added successfully' not in content:
+            self.info(content)
+            self.message('Job submission failed')
+            return
+        self.message('Job submission successful')
             
     def project_directory(self):
         path = cmds.workspace(query=True, rootDirectory=True)
-        if not path.startswith(self.config['shared_path']):
+        if not path.startswith(self.config['sharedPath']):
             return false
         else:
-            relative_path = path[len(self.config['shared_path']):]
+            relative_path = path[len(self.config['sharedPath']):]
             while relative_path.startswith('/'):
                 relative_path = relative_path[1:]
             return relative_path
     
-    def pickshared_path(self,*args):
+    def pickSharedPath(self,*args):
         path = openFileDialog()
         if path != "":
-            cmds.textField("shared_path",edit=True,text=path)
+            cmds.textField("sharedPath",edit=True,text=path)
 
     def submit_path(self):
         path = cmds.file(query=True, sceneName=True)
@@ -157,7 +220,7 @@ class Submitter(OpenMayaMPx.MPxCommand):
         return os.path.join(dirname, '_' + basename + '_submit' + ext).replace(os.sep, '/')
 
     def relative_path(self):
-        relative_path = self.submit_path()[len(self.config['shared_path']):]
+        relative_path = self.submit_path()[len(self.config['sharedPath']):]
         while relative_path.startswith('/'):
             relative_path = relative_path[1:]
         return relative_path
